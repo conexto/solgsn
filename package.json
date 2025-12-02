@@ -31,13 +31,18 @@
     "localnet:reset": "npm run localnet:down && npm run clean:store && npm run localnet:up && npm run build",
     "localnet:logs": "solana-localnet logs -f",
     "pretty": "prettier --write '{,src/**/}*.js'",
-    "postinstall": "npm run bpf-sdk:update && cargo update --manifest-path=src/program-rust/Cargo.toml"
+    "postinstall": "npm run bpf-sdk:update && cargo update --manifest-path=src/program-rust/Cargo.toml",
+    "test": "jest --testTimeout=300000",
+    "test:integration": "jest tests/integration.test.js --testTimeout=300000"
   },
   "devDependencies": {
-    "prettier": "^2.0.2"
+    "prettier": "^2.0.2",
+    "jest": "^26.6.3",
+    "babel-jest": "^26.6.3"
   },
   "dependencies": {
     "@solana/web3.js": "^0.86.4",
+    "borsh": "^0.7.0",
     "babel-cli": "^6.26.0",
     "babel-core": "^6.26.3",
     "babel-eslint": "^10.0.1",

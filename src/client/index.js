@@ -199,6 +199,51 @@ export async function initialize(): Promise<void> {
 }
 
 /**
+ * Topup Account with parameters
+ */
+export async function topupWithParams(
+    connection: Connection,
+    gsnAccount: Account,
+    consumerAccount: Account,
+    amount: u64,
+    payerAccount: Account,
+    programIdParam?: PublicKey,
+): Promise<void> {
+    const pid = programIdParam || programId;
+    if (!pid) {
+        throw new Error('Program ID not set. Call loadProgram() first or pass programIdParam.');
+    }
+
+    const keys = [
+        { pubkey: gsnAccount.publicKey, isSigner: false, isWritable: true },
+        { pubkey: consumerAccount.publicKey, isSigner: false, isWritable: false },
+    ];
+
+    const data = Buffer.alloc(topupLayout.span);
+
+    topupLayout.encode(
+        {
+            instruction: 1,
+            amount: amount.toBuffer(),
+        },
+        data,
+    );
+
+    const instruction = new TransactionInstruction({
+        keys,
+        programId: pid,
+        data,
+    });
+
+    await sendAndConfirmTransaction(
+        'topup',
+        connection,
+        new Transaction().add(instruction),
+        payerAccount,
+    );
+}
+
+/**
  * Topup Account
  */
 export async function topup(): Promise<void> {
@@ -280,6 +325,7 @@ export async function submitTx(): Promise<void> {
     const submitLayout = BufferLayout.struct([
         BufferLayout.u8('instruction'),
         uint64('amount'),
+        uint64('nonce'),
     ]);
 
     const data = Buffer.alloc(submitLayout.span);
@@ -288,6 +334,7 @@ export async function submitTx(): Promise<void> {
         {
             instruction: 2,
             amount: new u64(1000000000).toBuffer(),
+            nonce: new u64(0).toBuffer(),
         },
         data,
     );
@@ -393,6 +440,113 @@ export async function submitTx(): Promise<void> {
         feePayerAccountBalNew / LAMPORTS_PER_SOL,
         'Sol\n',
     );
+}
+
+/**
+ * Submit Transaction with parameters
+ */
+export async function submitTxWithParams(
+    connection: Connection,
+    targetProgram: PublicKey,
+    senderAccount: Account,
+    receiverAccount: Account,
+    feePayerAccount: Account,
+    gsnAccount: Account,
+    amount: u64,
+    nonce: u64,
+    programIdParam: PublicKey,
+): Promise<string> {
+    const pid = programIdParam;
+    const keys = [
+        { pubkey: targetProgram, isSigner: false, isWritable: true },
+        { pubkey: senderAccount.publicKey, isSigner: true, isWritable: true },
+        { pubkey: receiverAccount.publicKey, isSigner: false, isWritable: true },
+        { pubkey: feePayerAccount.publicKey, isSigner: true, isWritable: true },
+        { pubkey: gsnAccount.publicKey, isSigner: false, isWritable: true },
+    ];
+
+    const submitLayout = BufferLayout.struct([
+        BufferLayout.u8('instruction'),
+        uint64('amount'),
+        uint64('nonce'),
+    ]);
+
+    const data = Buffer.alloc(submitLayout.span);
+
+    submitLayout.encode(
+        {
+            instruction: 2,
+            amount: amount.toBuffer(),
+            nonce: nonce.toBuffer(),
+        },
+        data,
+    );
+
+    const instruction = new TransactionInstruction({
+        keys,
+        programId,
+        data,
+    });
+
+    const trans = new Transaction({
+        feePayer: feePayerAccount.publicKey,
+    }).add(instruction);
+
+    const signature = await sendAndConfirmTransaction(
+        'submitTx',
+        connection,
+        trans,
+        senderAccount,
+        feePayerAccount,
+    );
+
+    return signature;
+}
+
+/**
+ * Claim Fees
+ */
+export async function claimFees(
+    connection: Connection,
+    gsnAccount: Account,
+    executorAccount: Account,
+    programIdParam: PublicKey,
+): Promise<string> {
+    const pid = programIdParam;
+    const keys = [
+        { pubkey: gsnAccount.publicKey, isSigner: false, isWritable: true },
+        { pubkey: executorAccount.publicKey, isSigner: true, isWritable: true },
+        { pubkey: executorAccount.publicKey, isSigner: false, isWritable: true }, // destination (same as executor)
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ];
+
+    const claimLayout = BufferLayout.struct([
+        BufferLayout.u8('instruction'),
+    ]);
+
+    const data = Buffer.alloc(claimLayout.span);
+
+    claimLayout.encode(
+        {
+            instruction: 6, // ClaimFees instruction
+        },
+        data,
+    );
+
+    const instruction = new TransactionInstruction({
+        keys,
+        programId: pid,
+        data,
+    });
+
+    const signature = await sendAndConfirmTransaction(
+        'claimFees',
+        connection,
+        new Transaction().add(instruction),
+        executorAccount,
+    );
+
+    return signature;
 }
 
 /**
