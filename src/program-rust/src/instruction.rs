@@ -15,6 +15,8 @@ pub struct TopupAgrs {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SubmitArgs {
     pub amount: u64,
+    /// Nonce to prevent replay attacks
+    pub nonce: u64,
 }
 
 /// Update fee parameters argument structure
@@ -44,6 +46,7 @@ pub enum GsnInstruction {
     UpdateFeeParams(UpdateFeeParamsArgs),
     AddAllowedToken(TokenMintArgs),
     RemoveAllowedToken(TokenMintArgs),
+    ClaimFees,
 }
 
 impl GsnInstruction {
@@ -73,6 +76,7 @@ impl GsnInstruction {
                 let val: &TokenMintArgs = unpack(input)?;
                 Self::RemoveAllowedToken(val.clone())
             }
+            6 => Self::ClaimFees,
             _ => return Err(ProgramError::InvalidAccountData),
         })
     }

@@ -32,7 +32,7 @@ impl Processor {
             }
             GsnInstruction::SubmitTransaction(args) => {
                 info!("Instruction: Submit Transaction");
-                Self::process_submit_tx(args.amount, accounts)
+                Self::process_submit_tx(args.amount, args.nonce, accounts)
             }
             GsnInstruction::UpdateFeeParams(args) => {
                 info!("Instruction: Update Fee Params");
@@ -45,6 +45,10 @@ impl Processor {
             GsnInstruction::RemoveAllowedToken(args) => {
                 info!("Instruction: Remove Allowed Token");
                 Self::process_remove_allowed_token(args, accounts)
+            }
+            GsnInstruction::ClaimFees => {
+                info!("Instruction: Claim Fees");
+                Self::process_claim_fees(accounts)
             }
         }
     }
@@ -94,7 +98,7 @@ impl Processor {
         gsn.serialize(&mut gsn_program_info.data.borrow_mut())
     }
 
-    pub fn process_submit_tx(amount: u64, accounts: &[AccountInfo]) -> ProgramResult {
+    pub fn process_submit_tx(amount: u64, nonce: u64, accounts: &[AccountInfo]) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
         let target_program_info = next_account_info(account_info_iter)?;
         let sender_info = next_account_info(account_info_iter)?;
@@ -104,52 +108,79 @@ impl Processor {
 
         let mut gsn = GsnInfo::deserialize(&gsn_program_info.data.borrow())?;
 
-        if gsn.consumer.contains_key(&sender_info.key.to_string()) {
-            let inst = system_instruction::transfer(&sender_info.key, &reciever_info.key, amount);
+        let sender_key = sender_info.key.to_string();
 
-            // Calculate fee using governance configuration
-            let fee = gsn.calculate_fee(amount);
-
-            match invoke(
-                &inst,
-                &[
-                    sender_info.clone(),
-                    reciever_info.clone(),
-                    target_program_info.clone(),
-                ],
-            ) {
-                Ok(_) => {
-                    if gsn.executor.contains_key(&fee_payer_info.key.to_string()) {
-                        match gsn.executor.get(&fee_payer_info.key.to_string()) {
-                            Some(earned_amount) => {
-                                let val = earned_amount + fee;
-                                gsn.executor
-                                    .entry(fee_payer_info.key.to_string())
-                                    .or_insert(val);
-                            }
-                            None => println!("has no value"),
-                        }
-                    } else {
-                        gsn.add_executor(fee_payer_info.key.to_string(), fee);
-                    }
-                }
-                Err(error) => return Err(error),
-            }
-
-            match gsn.consumer.get(&sender_info.key.to_string()) {
-                Some(current_topup) => {
-                    let val = current_topup - fee;
-                    gsn.consumer
-                        .entry(sender_info.key.to_string())
-                        .or_insert(val);
-                }
-                None => println!("has no value"),
-            }
-
-            gsn.serialize(&mut gsn_program_info.data.borrow_mut())
-        } else {
+        // Check if consumer exists
+        if !gsn.consumer.contains_key(&sender_key) {
             return Err(ProgramError::InvalidInstructionData);
         }
+
+        // SECURITY CHECK 1: Verify nonce to prevent replay attacks
+        let expected_nonce = gsn.get_next_nonce(&sender_key);
+        if nonce != expected_nonce {
+            return Err(GsnError::InvalidNonce.into());
+        }
+
+        // Additional replay protection: check if nonce was already used
+        if gsn.is_nonce_used(&sender_key, nonce) {
+            return Err(GsnError::ReplayAttack.into());
+        }
+
+        // Calculate fee using governance configuration
+        let fee = gsn.calculate_fee(amount);
+
+        // SECURITY CHECK 2: Verify top-up balance covers expected fee BEFORE execution
+        let current_balance = gsn.consumer.get(&sender_key)
+            .copied()
+            .ok_or(GsnError::InsufficientBalance)?;
+        
+        if current_balance < fee {
+            return Err(GsnError::InsufficientBalance.into());
+        }
+
+        // Execute the transaction
+        let inst = system_instruction::transfer(&sender_info.key, &reciever_info.key, amount);
+
+        match invoke(
+            &inst,
+            &[
+                sender_info.clone(),
+                reciever_info.clone(),
+                target_program_info.clone(),
+            ],
+        ) {
+            Ok(_) => {
+                // SECURITY CHECK 3: Record transaction-executor mapping before updating balances
+                gsn.record_transaction_executor(&sender_key, nonce, &fee_payer_info.key.to_string());
+                
+                // Increment nonce to prevent replay
+                gsn.increment_nonce(&sender_key);
+
+                // Update executor balance
+                if gsn.executor.contains_key(&fee_payer_info.key.to_string()) {
+                    match gsn.executor.get(&fee_payer_info.key.to_string()) {
+                        Some(earned_amount) => {
+                            let val = earned_amount + fee;
+                            gsn.executor
+                                .entry(fee_payer_info.key.to_string())
+                                .or_insert(val);
+                        }
+                        None => println!("has no value"),
+                    }
+                } else {
+                    gsn.add_executor(fee_payer_info.key.to_string(), fee);
+                }
+
+                // Deduct fee from consumer balance
+                let val = current_balance - fee;
+                gsn.consumer
+                    .entry(sender_key)
+                    .or_insert(val);
+            }
+            Err(error) => return Err(error),
+        }
+
+        gsn.serialize(&mut gsn_program_info.data.borrow_mut())
     }
 
     pub fn process_update_fee_params(
@@ -230,6 +261,61 @@ impl Processor {
         gsn.remove_allowed_token(&mint_pubkey.to_string());
         gsn.serialize(&mut gsn_program_info.data.borrow_mut())
     }
+
+    pub fn process_claim_fees(accounts: &[AccountInfo]) -> ProgramResult {
+        let account_info_iter = &mut accounts.iter();
+        let gsn_program_info = next_account_info(account_info_iter)?;
+        let executor_info = next_account_info(account_info_iter)?;
+        let destination_info = next_account_info(account_info_iter)?;
+        let system_program_info = next_account_info(account_info_iter)?;
+
+        // SECURITY CHECK: Only the executor can claim their own fees
+        if !executor_info.is_signer {
+            return Err(GsnError::UnauthorizedFeeClaim.into());
+        }
+
+        let executor_key = executor_info.key.to_string();
+
+        // Verify the executor is claiming fees to their own account
+        if executor_info.key != destination_info.key {
+            return Err(GsnError::UnauthorizedFeeClaim.into());
+        }
+
+        let mut gsn = GsnInfo::deserialize(&gsn_program_info.data.borrow())?;
+
+        // Get the executor's earned fees
+        let earned_fees = gsn.executor
+            .get(&executor_key)
+            .copied()
+            .unwrap_or(0);
+
+        if earned_fees == 0 {
+            return Err(ProgramError::InsufficientFunds);
+        }
+
+        // Transfer fees to executor
+        // Note: This assumes gsn_program_info is a program-owned account that holds SOL
+        // The account must be writable and owned by the system program or this program
+        let transfer_instruction = system_instruction::transfer(
+            gsn_program_info.key,
+            destination_info.key,
+            earned_fees,
+        );
+
+        invoke(
+            &transfer_instruction,
+            &[
+                gsn_program_info.clone(),
+                destination_info.clone(),
+                system_program_info.clone(),
+            ],
+        )?;
+
+        // Reset executor's earned balance
+        gsn.executor.insert(executor_key, 0);
+
+        gsn.serialize(&mut gsn_program_info.data.borrow_mut())
+    }
 }
 
 impl PrintProgramError for GsnError {
@@ -243,6 +329,10 @@ impl PrintProgramError for GsnError {
             GsnError::Unauthorized => info!("Error: Unauthorized - not the governance authority"),
             GsnError::GovernanceNotInitialized => info!("Error: Governance not initialized"),
             GsnError::InvalidFeeMode => info!("Error: Invalid fee mode"),
+            GsnError::InsufficientBalance => info!("Error: Insufficient balance in top-up account"),
+            GsnError::ReplayAttack => info!("Error: Replay attack detected"),
+            GsnError::InvalidNonce => info!("Error: Invalid nonce"),
+            GsnError::UnauthorizedFeeClaim => info!("Error: Unauthorized fee claim"),
         }
     }
 }
