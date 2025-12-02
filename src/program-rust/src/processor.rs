@@ -1,4 +1,8 @@
-use crate::{error::GsnError, instruction::GsnInstruction, state::GsnInfo};
+use crate::{
+    error::GsnError,
+    instruction::{GsnInstruction, UpdateFeeParamsArgs, TokenMintArgs},
+    state::{FeeMode, GsnInfo},
+};
 
 use num_traits::FromPrimitive;
 use solana_program::{
@@ -9,6 +13,7 @@ use solana_program::{
     info,
     program::invoke,
     program_error::{PrintProgramError, ProgramError},
+    pubkey::Pubkey,
     system_instruction,
     // message::Message,
     // fee_calculator::FeeCalculator,
@@ -29,14 +34,37 @@ impl Processor {
                 info!("Instruction: Submit Transaction");
                 Self::process_submit_tx(args.amount, accounts)
             }
+            GsnInstruction::UpdateFeeParams(args) => {
+                info!("Instruction: Update Fee Params");
+                Self::process_update_fee_params(args, accounts)
+            }
+            GsnInstruction::AddAllowedToken(args) => {
+                info!("Instruction: Add Allowed Token");
+                Self::process_add_allowed_token(args, accounts)
+            }
+            GsnInstruction::RemoveAllowedToken(args) => {
+                info!("Instruction: Remove Allowed Token");
+                Self::process_remove_allowed_token(args, accounts)
+            }
         }
     }
 
     pub fn process_initialize(accounts: &[AccountInfo]) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
         let gsn_program_info = next_account_info(account_info_iter)?;
+        // Optional: authority account for governance (if provided)
+        let authority_info = next_account_info(account_info_iter).ok();
 
-        let gsn = GsnInfo::new();
+        let mut gsn = GsnInfo::new();
+        
+        // If authority is provided, initialize governance
+        if let Some(auth) = authority_info {
+            if !auth.is_signer {
+                return Err(GsnError::Unauthorized.into());
+            }
+            gsn.initialize_governance(*auth.key);
+        }
+
         gsn.serialize(&mut gsn_program_info.data.borrow_mut())
     }
 
@@ -79,10 +107,8 @@ impl Processor {
         if gsn.consumer.contains_key(&sender_info.key.to_string()) {
             let inst = system_instruction::transfer(&sender_info.key, &reciever_info.key, amount);
 
-            // let message = Message::new(&[inst.clone()], Some(&sender_info.key));
-            // let fee_calculator = FeeCalculator::new(1);
-            // let fee = fee_calculator.calculate_fee(&message);
-            let fee = 50000;
+            // Calculate fee using governance configuration
+            let fee = gsn.calculate_fee(amount);
 
             match invoke(
                 &inst,
@@ -125,6 +151,85 @@ impl Processor {
             return Err(ProgramError::InvalidInstructionData);
         }
     }
+
+    pub fn process_update_fee_params(
+        args: UpdateFeeParamsArgs,
+        accounts: &[AccountInfo],
+    ) -> ProgramResult {
+        let account_info_iter = &mut accounts.iter();
+        let gsn_program_info = next_account_info(account_info_iter)?;
+        let authority_info = next_account_info(account_info_iter)?;
+
+        if !authority_info.is_signer {
+            return Err(GsnError::Unauthorized.into());
+        }
+
+        let mut gsn = GsnInfo::deserialize(&gsn_program_info.data.borrow())?;
+
+        if !gsn.is_authority(authority_info.key) {
+            return Err(GsnError::Unauthorized.into());
+        }
+
+        let fee_mode = match args.fee_mode_type {
+            0 => FeeMode::Fixed(args.fee_value),
+            1 => {
+                if args.fee_value > 10000 {
+                    return Err(GsnError::InvalidFeeMode.into());
+                }
+                FeeMode::Percent(args.fee_value as u16)
+            }
+            _ => return Err(GsnError::InvalidFeeMode.into()),
+        };
+
+        gsn.update_fee_params(fee_mode);
+        gsn.serialize(&mut gsn_program_info.data.borrow_mut())
+    }
+
+    pub fn process_add_allowed_token(
+        args: TokenMintArgs,
+        accounts: &[AccountInfo],
+    ) -> ProgramResult {
+        let account_info_iter = &mut accounts.iter();
+        let gsn_program_info = next_account_info(account_info_iter)?;
+        let authority_info = next_account_info(account_info_iter)?;
+
+        if !authority_info.is_signer {
+            return Err(GsnError::Unauthorized.into());
+        }
+
+        let mut gsn = GsnInfo::deserialize(&gsn_program_info.data.borrow())?;
+
+        if !gsn.is_authority(authority_info.key) {
+            return Err(GsnError::Unauthorized.into());
+        }
+
+        let mint_pubkey = Pubkey::new_from_array(args.mint);
+        gsn.add_allowed_token(mint_pubkey.to_string());
+        gsn.serialize(&mut gsn_program_info.data.borrow_mut())
+    }
+
+    pub fn process_remove_allowed_token(
+        args: TokenMintArgs,
+        accounts: &[AccountInfo],
+    ) -> ProgramResult {
+        let account_info_iter = &mut accounts.iter();
+        let gsn_program_info = next_account_info(account_info_iter)?;
+        let authority_info = next_account_info(account_info_iter)?;
+
+        if !authority_info.is_signer {
+            return Err(GsnError::Unauthorized.into());
+        }
+
+        let mut gsn = GsnInfo::deserialize(&gsn_program_info.data.borrow())?;
+
+        if !gsn.is_authority(authority_info.key) {
+            return Err(GsnError::Unauthorized.into());
+        }
+
+        let mint_pubkey = Pubkey::new_from_array(args.mint);
+        gsn.remove_allowed_token(&mint_pubkey.to_string());
+        gsn.serialize(&mut gsn_program_info.data.borrow_mut())
+    }
 }
 
 impl PrintProgramError for GsnError {
@@ -135,6 +240,9 @@ impl PrintProgramError for GsnError {
         match self {
             GsnError::AlreadyInUse => info!("Error: GSN account already in use"),
             GsnError::InvalidState => info!("Error: GSN state is not valid"),
+            GsnError::Unauthorized => info!("Error: Unauthorized - not the governance authority"),
+            GsnError::GovernanceNotInitialized => info!("Error: Governance not initialized"),
+            GsnError::InvalidFeeMode => info!("Error: Invalid fee mode"),
         }
     }
 }

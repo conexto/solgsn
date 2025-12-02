@@ -1,12 +1,36 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use solana_program::program_error::ProgramError;
+use solana_program::{
+    program_error::ProgramError,
+    pubkey::Pubkey,
+};
 use std::collections::BTreeMap;
+
+/// Fee calculation mode
+#[derive(Clone, Debug, PartialEq, BorshSerialize, BorshDeserialize)]
+pub enum FeeMode {
+    /// Fixed fee amount in lamports
+    Fixed(u64),
+    /// Percentage fee (basis points, e.g., 100 = 1%)
+    Percent(u16),
+}
+
+/// Governance configuration
+#[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
+pub struct GovernanceConfig {
+    /// Authority address that can update governance parameters
+    pub authority: Pubkey,
+    /// Fee calculation mode
+    pub fee_mode: FeeMode,
+    /// Set of allowed token mint addresses (empty means all tokens allowed)
+    pub allowed_tokens: BTreeMap<String, bool>,
+}
 
 #[derive(Default, BorshSerialize, BorshDeserialize)]
 pub struct GsnInfo {
     pub is_initialized: bool,
     pub consumer: BTreeMap<String, u64>,
     pub executor: BTreeMap<String, u64>,
+    pub governance: Option<GovernanceConfig>,
 }
 
 impl GsnInfo {
@@ -33,6 +57,74 @@ impl GsnInfo {
             is_initialized: true,
             consumer: BTreeMap::new(),
             executor: BTreeMap::new(),
+            governance: None,
+        }
+    }
+
+    /// Initialize governance with default authority
+    pub fn initialize_governance(&mut self, authority: Pubkey) {
+        self.governance = Some(GovernanceConfig {
+            authority,
+            fee_mode: FeeMode::Fixed(50000), // Default 50,000 lamports
+            allowed_tokens: BTreeMap::new(), // Empty means all tokens allowed
+        });
+    }
+
+    /// Calculate fee based on governance configuration
+    pub fn calculate_fee(&self, transaction_amount: u64) -> u64 {
+        match &self.governance {
+            Some(gov) => match &gov.fee_mode {
+                FeeMode::Fixed(amount) => *amount,
+                FeeMode::Percent(basis_points) => {
+                    // Calculate percentage: (amount * basis_points) / 10000
+                    (transaction_amount as u128 * *basis_points as u128 / 10000) as u64
+                }
+            },
+            None => 50000, // Default fallback
+        }
+    }
+
+    /// Check if a token is allowed for fee payment
+    pub fn is_token_allowed(&self, token_mint: &str) -> bool {
+        match &self.governance {
+            Some(gov) => {
+                // If allowed_tokens is empty, all tokens are allowed
+                if gov.allowed_tokens.is_empty() {
+                    true
+                } else {
+                    gov.allowed_tokens.get(token_mint).copied().unwrap_or(false)
+                }
+            }
+            None => true, // If no governance, all tokens allowed
+        }
+    }
+
+    /// Add an allowed token
+    pub fn add_allowed_token(&mut self, token_mint: String) {
+        if let Some(gov) = &mut self.governance {
+            gov.allowed_tokens.insert(token_mint, true);
+        }
+    }
+
+    /// Remove an allowed token
+    pub fn remove_allowed_token(&mut self, token_mint: &str) {
+        if let Some(gov) = &mut self.governance {
+            gov.allowed_tokens.remove(token_mint);
+        }
+    }
+
+    /// Update fee parameters
+    pub fn update_fee_params(&mut self, fee_mode: FeeMode) {
+        if let Some(gov) = &mut self.governance {
+            gov.fee_mode = fee_mode;
+        }
+    }
+
+    /// Check if an address is the governance authority
+    pub fn is_authority(&self, address: &Pubkey) -> bool {
+        match &self.governance {
+            Some(gov) => gov.authority == *address,
+            None => false,
         }
     }
 }

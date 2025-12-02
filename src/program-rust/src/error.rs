@@ -10,6 +10,15 @@ pub enum GsnError {
     AlreadyInUse,
     #[error("InvalidState")]
     InvalidState,
+    /// Unauthorized: caller is not the governance authority
+    #[error("Unauthorized: not the governance authority")]
+    Unauthorized,
+    /// Governance not initialized
+    #[error("Governance not initialized")]
+    GovernanceNotInitialized,
+    /// Invalid fee mode
+    #[error("Invalid fee mode")]
+    InvalidFeeMode,
 }
 
 impl From<GsnError> for ProgramError {
