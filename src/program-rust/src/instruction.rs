@@ -1,4 +1,5 @@
 /// Instructions supported by the SolGSN.
+use crate::state::FeeMode;
 use solana_program::program_error::ProgramError;
 use std::mem::size_of;
 
@@ -16,12 +17,33 @@ pub struct SubmitArgs {
     pub amount: u64,
 }
 
+/// Update fee parameters argument structure
+#[repr(C)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct UpdateFeeParamsArgs {
+    /// Fee mode: 0 = Fixed, 1 = Percent
+    pub fee_mode_type: u8,
+    /// For Fixed: amount in lamports, For Percent: basis points (e.g., 100 = 1%)
+    pub fee_value: u64,
+}
+
+/// Add/Remove allowed token argument structure
+#[repr(C)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct TokenMintArgs {
+    /// Token mint address as bytes (32 bytes for Pubkey)
+    pub mint: [u8; 32],
+}
+
 #[repr(C)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum GsnInstruction {
     Initialize,
     Topup(TopupAgrs),
     SubmitTransaction(SubmitArgs),
+    UpdateFeeParams(UpdateFeeParamsArgs),
+    AddAllowedToken(TokenMintArgs),
+    RemoveAllowedToken(TokenMintArgs),
 }
 
 impl GsnInstruction {
@@ -38,6 +60,18 @@ impl GsnInstruction {
             2 => {
                 let val: &SubmitArgs = unpack(input)?;
                 Self::SubmitTransaction(val.clone())
+            }
+            3 => {
+                let val: &UpdateFeeParamsArgs = unpack(input)?;
+                Self::UpdateFeeParams(val.clone())
+            }
+            4 => {
+                let val: &TokenMintArgs = unpack(input)?;
+                Self::AddAllowedToken(val.clone())
+            }
+            5 => {
+                let val: &TokenMintArgs = unpack(input)?;
+                Self::RemoveAllowedToken(val.clone())
             }
             _ => return Err(ProgramError::InvalidAccountData),
         })
