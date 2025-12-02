@@ -23,6 +23,29 @@ Using this platform, One can pay transaction fee in other solana supported token
 You will see output something like this:<br/><br/>
 <img src="https://cdn.discordapp.com/attachments/771687256703893526/776499272664350780/cli.png" height="400" width="700">
 
+## Running Integration Tests
+
+Integration tests are available to verify all key flows. See [tests/README.md](tests/README.md) for detailed instructions.
+
+Quick start:
+```bash
+# 1. Start localnet
+npm run localnet:up
+
+# 2. Build program
+npm run build
+
+# 3. Run tests
+npm run test:integration
+```
+
+The tests cover:
+- User top-up with SOL
+- User top-up with SPL token (mock)
+- Gasless transaction with fee deduction
+- Executor claiming accumulated fees
+- User/Dapp withdrawal (documented, not yet implemented)
+
 # User Flow
 
 The SolGSN system enables gasless transactions through a complete lifecycle from top-up to withdrawal:
