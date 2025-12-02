@@ -28,6 +28,7 @@
     "localnet:update": "solana-localnet update",
     "localnet:up": "set -x; solana-localnet down; set -e; solana-localnet up",
     "localnet:down": "solana-localnet down",
+    "localnet:reset": "npm run localnet:down && npm run clean:store && npm run localnet:up && npm run build",
     "localnet:logs": "solana-localnet logs -f",
     "pretty": "prettier --write '{,src/**/}*.js'",
     "postinstall": "npm run bpf-sdk:update && cargo update --manifest-path=src/program-rust/Cargo.toml"

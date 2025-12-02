@@ -219,20 +219,46 @@ export async function topup(): Promise<void> {
         data,
     );
 
-    console.log('Topping up account...');
+    const topupAmount = new u64(10000000);
+    const previousBalance = await connection.getBalance(senderAccount.publicKey).catch(() => 0);
+    
+    console.log('[TOPUP_START]', JSON.stringify({
+        consumer: senderAccount.publicKey.toBase58(),
+        amount: topupAmount.toString(),
+        amount_sol: (topupAmount.toNumber() / LAMPORTS_PER_SOL).toFixed(9),
+        previous_balance: previousBalance,
+    }));
+
     const instruction = new TransactionInstruction({
         keys,
         programId,
         data,
     });
 
-    await sendAndConfirmTransaction(
-        'topup',
-        connection,
-        new Transaction().add(instruction),
-        payerAccount,
-    );
-    console.log('Topup successful.');
+    try {
+        await sendAndConfirmTransaction(
+            'topup',
+            connection,
+            new Transaction().add(instruction),
+            payerAccount,
+        );
+        
+        const newBalance = await connection.getBalance(senderAccount.publicKey).catch(() => 0);
+        console.log('[TOPUP_SUCCESS]', JSON.stringify({
+            consumer: senderAccount.publicKey.toBase58(),
+            amount: topupAmount.toString(),
+            amount_sol: (topupAmount.toNumber() / LAMPORTS_PER_SOL).toFixed(9),
+            previous_balance: previousBalance,
+            new_balance: newBalance,
+        }));
+    } catch (error) {
+        console.error('[TOPUP_FAILED]', JSON.stringify({
+            consumer: senderAccount.publicKey.toBase58(),
+            amount: topupAmount.toString(),
+            error: error.message || String(error),
+        }));
+        throw error;
+    }
 }
 
 /**
@@ -291,8 +317,19 @@ export async function submitTx(): Promise<void> {
         'Sol',
     );
 
-    console.log('\nTransfer 1 SOL from Sender To Receiver');
+    const transferAmount = new u64(1000000000);
+    const transferAmountSol = transferAmount.toNumber() / LAMPORTS_PER_SOL;
+    
+    console.log('\n[EXECUTION_START]', JSON.stringify({
+        consumer: senderAccount.publicKey.toBase58(),
+        executor: feePayerAccount.publicKey.toBase58(),
+        receiver: recieverAccount.publicKey.toBase58(),
+        amount: transferAmount.toString(),
+        amount_sol: transferAmountSol.toFixed(9),
+    }));
+    console.log(`Transfer ${transferAmountSol} SOL from Sender To Receiver`);
     console.log('Submitting Transaction... \n');
+    
     const instruction = new TransactionInstruction({
         keys,
         programId,
@@ -303,13 +340,32 @@ export async function submitTx(): Promise<void> {
         feePayer: feePayerAccount.publicKey,
     }).add(instruction);
 
-    await sendAndConfirmTransaction(
-        'topup',
-        connection,
-        trans,
-        senderAccount,
-        feePayerAccount,
-    );
+    try {
+        await sendAndConfirmTransaction(
+            'submitTx',
+            connection,
+            trans,
+            senderAccount,
+            feePayerAccount,
+        );
+        
+        console.log('[EXECUTION_SUCCESS]', JSON.stringify({
+            consumer: senderAccount.publicKey.toBase58(),
+            executor: feePayerAccount.publicKey.toBase58(),
+            receiver: recieverAccount.publicKey.toBase58(),
+            amount: transferAmount.toString(),
+            amount_sol: transferAmountSol.toFixed(9),
+        }));
+    } catch (error) {
+        console.error('[EXECUTION_FAILED]', JSON.stringify({
+            consumer: senderAccount.publicKey.toBase58(),
+            executor: feePayerAccount.publicKey.toBase58(),
+            receiver: recieverAccount.publicKey.toBase58(),
+            amount: transferAmount.toString(),
+            error: error.message || String(error),
+        }));
+        throw error;
+    }
 
     const senderAccountBalNew = await connection.getBalance(
         senderAccount.publicKey,
