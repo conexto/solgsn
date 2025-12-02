@@ -19,6 +19,18 @@ pub enum GsnError {
     /// Invalid fee mode
     #[error("Invalid fee mode")]
     InvalidFeeMode,
+    /// Insufficient balance in top-up account
+    #[error("Insufficient balance: top-up balance does not cover expected fee")]
+    InsufficientBalance,
+    /// Replay attack detected: nonce already used
+    #[error("Replay attack detected: nonce already used")]
+    ReplayAttack,
+    /// Invalid nonce: nonce must be exactly one more than current nonce
+    #[error("Invalid nonce: expected next nonce")]
+    InvalidNonce,
+    /// Unauthorized fee claim: only the executor who executed the transaction can claim fees
+    #[error("Unauthorized fee claim: only the executor who executed the transaction can claim")]
+    UnauthorizedFeeClaim,
 }
 
 impl From<GsnError> for ProgramError {
